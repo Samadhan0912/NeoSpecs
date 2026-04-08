@@ -15,11 +15,12 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+# from pydantic import BaseModel # Pydantic BaseModel is used implicitly by FastAPI, but not explicitly defined here
 from groq import Groq
 import edge_tts
 import chromadb
 from chromadb.utils import embedding_functions
-from deepface import DeepFace # Note: DeepFace can be heavy, might need specific buildpacks/configs on Render
+from deepface import DeepFace 
 
 # =====================================================
 # 1. CONFIGURATION & MULTILINGUAL SETUP
@@ -41,9 +42,10 @@ class Config:
     GROQ_KEY = os.getenv("GROQ_KEY") 
     
     # --- 🧠 AI MODELS ---
-    VISION_MODEL = "llama-3.1-405b-reasoning" # Updated to a more recent Groq vision model example
-    LLM_MODEL = "llama-3.1-70b-versatile" # Updated to a more recent Groq LLM model example                  
-    STT_MODEL = "whisper-large-v3" # Groq's STT model, no 'turbo' suffix
+    # Updated to recent Groq models, ensure these are available on Groq's platform
+    VISION_MODEL = "llama-3.1-405b-reasoning" 
+    LLM_MODEL = "llama-3.1-70b-versatile"                     
+    STT_MODEL = "whisper-large-v3" # Groq's STT model often does not have 'turbo' suffix
 
     # --- 🌍 MULTILINGUAL VOICE MAPPING ---
     # These are Edge TTS voices
@@ -81,17 +83,18 @@ for d in ["voice_inputs", "ai_responses"]:
 
 try:
     if not Config.GROQ_KEY:
-        raise ValueError("GROQ_KEY environment variable not set.")
+        raise ValueError("GROQ_KEY environment variable not set. Please provide it for Groq client initialization.")
     groq_client = Groq(api_key=Config.GROQ_KEY, max_retries=2)
+    logger.info("Groq Client initialized successfully.")
 except Exception as e:
-    logger.critical(f"Failed to initialize Groq Client: {e}. Please set GROQ_KEY environment variable.")
-    groq_client = None # Set to None to handle gracefully if key is missing
+    logger.critical(f"Failed to initialize Groq Client: {e}")
+    groq_client = None # Set to None to handle gracefully if key is missing or invalid
 
 # Vector DB Init
 logger.info("🧠 Initializing Neo's Neural Memory Databases...")
 try:
     chroma_client = chromadb.PersistentClient(path="./neospecs_db")
-    # Using 'all-MiniLM-L6-v2' as a default SentenceTransformer model, check if it's available or change if needed.
+    # Using 'all-MiniLM-L6-v2' as a default SentenceTransformer model, which needs sentence-transformers package.
     # On Render free tier, data in 'neospecs_db' will be ephemeral (deleted on restart).
     emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
     visual_db = chroma_client.get_or_create_collection("visual_memory", embedding_function=emb_fn)
@@ -123,19 +126,20 @@ class AppState:
     @classmethod
     def log_interaction(cls, user_text: str, ai_text: str):
         cls.INTERACTION_HISTORY.append({
-            "user": user_text, "ai": ai_text, "time": datetime.now().strftime("%I:%M %p")
+            "user": user_text, "ai": ai_text, "time": datetime.now().strftime("%I:%M %p"), "mode": cls.SYSTEM_MODE # Include mode for Flutter logs
         })
+        # Keep history concise to prevent token overflow for LLM context
         if len(cls.INTERACTION_HISTORY) > 6:
             cls.INTERACTION_HISTORY.pop(0)
             
     @classmethod
     def get_context_string(cls) -> str:
         if not cls.INTERACTION_HISTORY: return "No prior context."
-        # Limit context to prevent token overflow with vision models
+        # Limit context to prevent token overflow with LLM/vision models
         return "\n".join([f"User: {x['user']} | Neo: {x['ai']}" for x in cls.INTERACTION_HISTORY[-3:]])
 
 # =====================================================
-# 3. ROBUST AUDIO & PLAYBACK CONTROLLER (Removed - Server does not play audio)
+# 3. ROBUST AUDIO & PLAYBACK CONTROLLER (REMOVED: Server does not play audio)
 # =====================================================
 # All pygame imports and AudioController class removed as server no longer plays audio.
 
@@ -171,7 +175,7 @@ class AIService:
     @staticmethod
     async def transcribe_with_retry(wav_path: str) -> str:
         if not groq_client:
-            raise RuntimeError("Groq client not initialized. Cannot perform STT.")
+            raise RuntimeError("Groq client not initialized. Cannot perform Speech-to-Text.")
         for attempt in range(Config.MAX_RETRIES):
             try:
                 with open(wav_path, "rb") as audio_file:
@@ -185,16 +189,17 @@ class AIService:
                 return transcript.text.strip()
             except Exception as e:
                 logger.warning(f"STT Attempt {attempt+1} Failed: {e}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5) # Small delay before retrying
         raise RuntimeError("Speech-to-Text pipeline failed after multiple retries.")
 
     @staticmethod
     async def classify_and_correct_intent(user_query: str) -> Dict[str, Any]:
         if not groq_client:
+            # Fallback if Groq client is not initialized
             return {"intent": "GENERAL_CHAT", "language_code": "en", "language_name": "English", "is_unclear": False, "corrected_query": user_query}
+        
         """
-        Fixes the 'junior Tina and go distance' problem. 
-        Uses LLM to interpret phonetics, correct transcription errors, and classify intent.
+        Fixes common transcription errors and classifies user intent.
         """
         prompt = (
             f"Analyze this transcribed speech from the user: '{user_query}'\n"
@@ -237,12 +242,13 @@ class AIService:
             }
         except Exception as e:
             logger.error(f"Classification JSON Error: {e}")
+            logger.debug(traceback.format_exc())
             return {"intent": "GENERAL_CHAT", "language_code": "en", "language_name": "English", "is_unclear": False, "corrected_query": user_query}
 
     @staticmethod
     async def generate_dynamic_response(context_prompt: str) -> str:
         if not groq_client:
-            return "AI services are offline."
+            return "AI services are currently offline. Please check the API key."
         sys_prompt = AIService.get_neo_prompt(AppState.SYSTEM_MODE, AppState.CURRENT_LANGUAGE_NAME)
         try:
             res = await asyncio.to_thread(
@@ -258,12 +264,13 @@ class AIService:
             return AIService.clean_text(res.choices[0].message.content)
         except Exception as e:
             logger.error(f"LLM Fault: {e}")
+            logger.debug(traceback.format_exc())
             return "Experiencing a brief neural delay. One moment."
 
     @staticmethod
     async def generate_voice(text: str, output_path: str, lang_code: str = "en") -> bool:
         if not text or len(text.strip()) < 2:
-            logger.warning("Attempted to generate voice for empty or too short text.")
+            logger.warning("Attempted to generate voice for empty or too short text, skipping.")
             return False
 
         voice = Config.VOICE_MAP.get(lang_code[:2], Config.DEFAULT_VOICE)
@@ -273,20 +280,24 @@ class AIService:
             return True
         except Exception as e:
             logger.error(f"TTS Engine Failure: {e}")
+            logger.debug(traceback.format_exc())
             return False
 
     @staticmethod
     def get_base64_image() -> Optional[str]:
-        if not os.path.exists(Config.LATEST_IMAGE): return None
+        if not os.path.exists(Config.LATEST_IMAGE): 
+            logger.debug(f"Image file not found: {Config.LATEST_IMAGE}")
+            return None
         try:
             size = os.path.getsize(Config.LATEST_IMAGE)
             if size < 2048: # Minimum size to consider it a valid image
-                logger.debug(f"Image too small ({size} bytes), skipping base64 encoding.")
+                logger.warning(f"Image too small ({size} bytes) in {Config.LATEST_IMAGE}, skipping base64 encoding.")
                 return None
             with open(Config.LATEST_IMAGE, "rb") as img: 
                 return base64.b64encode(img.read()).decode('utf-8')
         except Exception as e:
-            logger.error(f"Error reading or encoding image: {e}")
+            logger.error(f"Error reading or encoding image from {Config.LATEST_IMAGE}: {e}")
+            logger.debug(traceback.format_exc())
             return None
 
     @staticmethod
@@ -304,12 +315,13 @@ class AIService:
                 # Assuming 16-bit, 1 channel, 16000 Hz PCM for raw data
                 with wave.open(path, "wb") as wf:
                     wf.setnchannels(1)
-                    wf.setsampwidth(2) # 2 bytes for 16-bit
-                    wf.setframerate(16000)
+                    wf.setsampwidth(2) # 2 bytes for 16-bit audio
+                    wf.setframerate(16000) # Standard sample rate
                     wf.writeframes(audio_data)
             return True
         except Exception as e:
-            logger.error(f"Audio write validation failed: {e}")
+            logger.error(f"Audio write/validation failed for path {path}: {e}")
+            logger.debug(traceback.format_exc())
             return False
 
 # =====================================================
@@ -323,13 +335,13 @@ async def _chronicler_task():
     
     current_img_time = os.path.getmtime(Config.LATEST_IMAGE)
     if current_img_time <= AppState.LAST_PROCESSED_IMAGE_TIME: 
-        logger.debug("Image not updated since last check for chronicler task.")
+        logger.debug("Image not updated since last chronicler task check, skipping.")
         return 
     
     AppState.LAST_PROCESSED_IMAGE_TIME = current_img_time
     b64 = AIService.get_base64_image()
     if not b64: 
-        logger.warning("Could not get base64 image for chronicler task, skipping.")
+        logger.warning("Could not get base64 image for chronicler task (too small/error), skipping.")
         return
 
     try:
@@ -354,25 +366,28 @@ async def _chronicler_task():
         ai_thought = res.choices[0].message.content.strip()
         current_time = time.time()
         
-        if "SILENT" in ai_thought.upper():
-            if len(ai_thought) > 10: # Only add to memory if it's not just "SILENT" but has some descriptive text
-                if visual_db:
-                    visual_db.add(documents=[f"[{datetime.now().strftime('%H:%M')}] {ai_thought}"], ids=[f"v_{current_time}"])
-        else:
-            if (current_time - AppState.LAST_PROACTIVE_TIME) > Config.PROACTIVE_COOLDOWN:
-                logger.info(f"👁️ Neo Proactive Alert[{AppState.CURRENT_LANGUAGE_NAME}]: {ai_thought}")
-                AppState.LAST_PROACTIVE_TIME = current_time
-                
-                filename = f"pro_{int(current_time)}.mp3"
-                path = os.path.join(Config.DATA_DIR, "ai_responses", filename)
-                
-                if await AIService.generate_voice(ai_thought, path, AppState.CURRENT_LANGUAGE_CODE):
-                    AppState.PROACTIVE_AUDIO_PENDING = True
-                    AppState.PROACTIVE_AUDIO_URL = f"/media/{filename}"
-                    # Removed server-side playback: threading.Thread(target=AudioController.play, args=(path,), daemon=True).start()
-                    logger.info(f"Proactive audio generated for client: {AppState.PROACTIVE_AUDIO_URL}")
-                else:
-                    logger.warning("Failed to generate proactive voice, no audio URL will be available.")
+        if "SILENT" in ai_thought.upper() and len(ai_thought) < 10: # Only "SILENT" or very short "SILENT."
+            logger.debug("Chronicler detected normal/safe scene.")
+            # Do not add simple "SILENT" to memory
+        else: # If it's an actual alert or more descriptive than just "SILENT"
+            if visual_db: # Only add to memory if DB is initialized
+                visual_db.add(documents=[f"[{datetime.now().strftime('%H:%M')}] {ai_thought}"], ids=[f"v_{current_time}"])
+            
+            if "SILENT" not in ai_thought.upper(): # This is a real alert
+                if (current_time - AppState.LAST_PROACTIVE_TIME) > Config.PROACTIVE_COOLDOWN:
+                    logger.info(f"👁️ Neo Proactive Alert[{AppState.CURRENT_LANGUAGE_NAME}]: {ai_thought}")
+                    AppState.LAST_PROACTIVE_TIME = current_time
+                    
+                    filename = f"pro_{int(current_time)}.mp3"
+                    path = os.path.join(Config.DATA_DIR, "ai_responses", filename)
+                    
+                    if await AIService.generate_voice(ai_thought, path, AppState.CURRENT_LANGUAGE_CODE):
+                        AppState.PROACTIVE_AUDIO_PENDING = True
+                        AppState.PROACTIVE_AUDIO_URL = f"/media/{filename}"
+                        # REMOVED SERVER-SIDE PLAYBACK: threading.Thread(target=AudioController.play, args=(path,), daemon=True).start()
+                        logger.info(f"Proactive audio generated for client: {AppState.PROACTIVE_AUDIO_URL}")
+                    else:
+                        logger.warning("Failed to generate proactive voice, no audio URL will be available for client.")
 
     except Exception as e: 
         logger.warning(f"Chronicler Background Error: {e}")
@@ -404,7 +419,7 @@ async def startup_event():
         startup_path = os.path.join(Config.DATA_DIR, "ai_responses", "startup.mp3")
         txt = await AIService.generate_dynamic_response("System successfully booted. Introduce yourself professionally as Neo in 1 short sentence.")
         if await AIService.generate_voice(txt, startup_path, AppState.CURRENT_LANGUAGE_CODE):
-            # Removed server-side playback: threading.Thread(target=AudioController.play, args=(startup_path,), daemon=True).start()
+            # REMOVED SERVER-SIDE PLAYBACK: threading.Thread(target=AudioController.play, args=(startup_path,), daemon=True).start()
             logger.info(f"Startup audio generated for client: /media/{os.path.basename(startup_path)}")
         else:
             logger.warning("Failed to generate startup voice.")
@@ -418,7 +433,7 @@ async def upload_image(request: Request):
     try:
         content = await request.body()
         if len(content) < 1024: 
-            logger.warning(f"Received image too small: {len(content)} bytes.")
+            logger.warning(f"Received image too small: {len(content)} bytes. Minimum is 1024 bytes.")
             return JSONResponse({"status": "error", "message": "Image too small"}, status_code=400)
         
         with open(Config.TEMP_IMAGE, "wb") as f: f.write(content)
@@ -459,20 +474,20 @@ async def get_live_camera():
 async def check_proactive():
     if AppState.PROACTIVE_AUDIO_PENDING:
         resp = {"status": "success", "new_audio": True, "url": AppState.PROACTIVE_AUDIO_URL}
-        AppState.PROACTIVE_AUDIO_PENDING = False 
+        AppState.PROACTIVE_AUDIO_PENDING = False # Reset the flag after client checks
         logger.info(f"Client checked for proactive audio, returning: {AppState.PROACTIVE_AUDIO_URL}")
         return JSONResponse(content=resp)
     return JSONResponse(content={"status": "success", "new_audio": False})
 
 @app.get("/set_mode")
-async def set_mode(mode: str, background_tasks: BackgroundTasks):
+async def set_mode(mode: str): # Removed background_tasks as server won't play audio
     mode = mode.lower()
     if mode not in ["professional", "wingman", "blind_assistant"]: 
         return JSONResponse({"status": "error", "message": "Invalid Mode"}, status_code=400)
     
+    # AudioController.stop() Removed server-side stop, Flutter app will handle stopping playback if needed.
     AppState.SYSTEM_MODE = mode
-    # AudioController.stop() Removed server-side stop
-
+    
     mode_powers = {
         "professional": "reading text, analytical vision, and professional assistance",
         "wingman": "detecting emotions and analyzing social cues",
@@ -480,15 +495,17 @@ async def set_mode(mode: str, background_tasks: BackgroundTasks):
     }
     
     prompt = f"User activated '{mode.replace('_', ' ').title()}' mode. Acknowledge this professionally in exactly 1 sentence, noting capabilities: {mode_powers[mode]}."
-    path = os.path.join(Config.DATA_DIR, "ai_responses", f"mode_{int(time.time())}.mp3")
+    filename = f"mode_{int(time.time())}.mp3"
+    path = os.path.join(Config.DATA_DIR, "ai_responses", filename)
     dynamic_msg = await AIService.generate_dynamic_response(prompt)
     
     audio_url = None
     if await AIService.generate_voice(dynamic_msg, path, AppState.CURRENT_LANGUAGE_CODE):
         audio_url = f"/media/{os.path.basename(path)}"
         logger.info(f"Mode change audio generated for client: {audio_url}")
-        # Removed server-side playback: background_tasks.add_task(AudioController.play, path)
+        # REMOVED SERVER-SIDE PLAYBACK: background_tasks.add_task(AudioController.play, path)
     
+    # Return audio_url in the response so Flutter app can play it
     return JSONResponse({"status": "success", "data": {"mode": AppState.SYSTEM_MODE, "announcement": dynamic_msg, "audio_url": audio_url}})
 
 
@@ -557,7 +574,7 @@ async def process_voice(request: Request): # Removed background_tasks as server 
             elif intent in ["VISION", "OBJECT_DESCRIPTION"]:
                 if b64_image:
                     if not groq_client:
-                        ai_reply = "Vision services are unavailable."
+                        ai_reply = "Vision services are unavailable. Groq client not initialized."
                     else:
                         prompt = f"Analyze the image factually and structurally. Answer the user's query: '{corrected_query}'. Keep it to 2-3 sentences. No assumptions."
                         res = await asyncio.to_thread(lambda: groq_client.chat.completions.create(model=Config.VISION_MODEL, messages=[{"role": "user", "content":[{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}]}], max_tokens=150).choices[0].message.content)
@@ -571,7 +588,7 @@ async def process_voice(request: Request): # Removed background_tasks as server 
             elif intent == "TRANSLATION":
                 if b64_image and ("read" in corrected_query.lower() or "look" in corrected_query.lower()):
                     if not groq_client:
-                        ai_reply = "Translation services are unavailable."
+                        ai_reply = "Translation services are unavailable. Groq client not initialized."
                     else:
                         prompt = f"Read the visible text in the image and translate it based on this request: '{corrected_query}'"
                         res = await asyncio.to_thread(lambda: groq_client.chat.completions.create(model=Config.VISION_MODEL, messages=[{"role": "user", "content":[{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}]}], max_tokens=150).choices[0].message.content)
@@ -581,26 +598,29 @@ async def process_voice(request: Request): # Removed background_tasks as server 
 
             elif intent == "LEARN_FACE":
                 if b64_image:
-                    if not groq_client or not face_db:
-                        ai_reply = "Face learning services are unavailable."
+                    if not groq_client:
+                        ai_reply = "Face learning services are unavailable. Groq client not initialized."
+                    elif not face_db:
+                        ai_reply = "Social memory database is not active. Cannot save face."
                     else:
                         info_ext = await asyncio.to_thread(lambda: groq_client.chat.completions.create(model=Config.LLM_MODEL, messages=[{"role":"user", "content":f"Extract name/context from: '{corrected_query}'. Output EXACTLY: Name - Context"}], max_tokens=20).choices[0].message.content)
-                        # DeepFace might require specific TensorFlow/OpenCV builds.
-                        # Consider alternatives or ensure Render environment supports it.
+                        # DeepFace might require specific TensorFlow/OpenCV builds which consume significant resources.
+                        # This operation is resource-intensive and might fail on free tiers.
                         face_res = await asyncio.to_thread(lambda: DeepFace.represent(img_path=Config.LATEST_IMAGE, model_name="Facenet", enforce_detection=True))
                         face_db.add(documents=[info_ext], embeddings=[face_res[0]["embedding"]], ids=[f"person_{ts}"])
                         ai_reply = await AIService.generate_dynamic_response(f"Face successfully saved as '{info_ext}'. Confirm this professionally.")
-                else: ai_reply = await AIService.generate_dynamic_response("Inform the user the camera is offline, so you cannot save the face.")
+                else: 
+                    ai_reply = await AIService.generate_dynamic_response("Inform the user the camera is offline, so you cannot save the face.")
 
             elif intent == "SAFETY_ALERT":
                 ai_reply = await AIService.generate_dynamic_response(f"User is asking about safety or danger: '{corrected_query}'. Assess and respond strictly regarding safety protocols and immediate environment.")
 
             elif intent == "QUESTION":
                 if not groq_client:
-                    ai_reply = "Intelligence services are unavailable."
+                    ai_reply = "Intelligence services are unavailable. Groq client not initialized."
                 else:
                     mem_context = "No recent visual memory relevant to this."
-                    if visual_db:
+                    if visual_db: # Only query if DB is initialized
                         results = visual_db.query(query_texts=[corrected_query], n_results=2)
                         mem = results['documents'][0] if (results['documents'] and len(results['documents'][0]) > 0) else []
                         mem_context = " | ".join(mem) if mem else "No recent visual memory relevant to this."
@@ -608,46 +628,49 @@ async def process_voice(request: Request): # Removed background_tasks as server 
                     ai_reply = await AIService.generate_dynamic_response(f"User asks: '{corrected_query}'. Relevant camera memory context: '{mem_context}'. Answer the user factually based on memory or general intelligence.")
 
             else: 
-                # GENERAL_CHAT
+                # GENERAL_CHAT (Default intent)
                 ai_reply = await AIService.generate_dynamic_response(f"User states: '{corrected_query}'. Respond naturally and professionally.")
 
         except Exception as routing_error:
             logger.warning(f"Feature Route Error ({intent}): {routing_error}")
             logger.debug(traceback.format_exc())
-            ai_reply = await AIService.generate_dynamic_response("You encountered an internal logic error. Apologize professionally.")
+            ai_reply = await AIService.generate_dynamic_response("You encountered an internal logic error. Apologize professionally and suggest trying again.")
         
         ai_text_response = ai_reply # Update the response text
 
-        # 5. Output Audio
+        # 5. Generate Output Audio for Client
         logger.info(f"✨ Neo [{lang_code}]: {ai_reply}")
         AppState.log_interaction(corrected_query, ai_reply)
 
         if await AIService.generate_voice(ai_reply, audio_out_path, AppState.CURRENT_LANGUAGE_CODE):
             returned_audio_url = f"/media/{audio_out_filename}"
             logger.info(f"Response audio generated for client: {returned_audio_url}")
+        else:
+            logger.warning("Failed to generate voice response for client.")
         
         return JSONResponse({
             "status": "success", 
             "data": {
                 "user_text": corrected_query, 
                 "ai_text": ai_reply, 
-                "audio_url": returned_audio_url, 
+                "audio_url": returned_audio_url, # Send the URL even if it's None (failed to generate)
                 "intent": intent,
                 "language": lang_name,
-                "mode": AppState.SYSTEM_MODE # Include mode for Flutter logs
+                "mode": AppState.SYSTEM_MODE 
             }
         })
 
     except Exception as e:
-        logger.error(f"❌ Critical Core Fault: {e}")
+        logger.error(f"❌ Critical Core Fault during voice processing: {e}")
         logger.error(traceback.format_exc())
         
         fallback_msg_text = "My systems experienced an unexpected interruption. Attempting to recover."
         try: 
             if groq_client:
-                fallback_msg_text = await AIService.generate_dynamic_response("System threw a critical error. Apologize professionally.")
+                # Try to get a professional apology from LLM if client is available
+                fallback_msg_text = await AIService.generate_dynamic_response("System threw a critical error. Apologize professionally and suggest trying again.")
         except: 
-            pass # Even dynamic response might fail
+            pass # Even dynamic response might fail in severe cases
         
         # Try to generate fallback audio if possible
         if await AIService.generate_voice(fallback_msg_text, audio_out_path, AppState.CURRENT_LANGUAGE_CODE):
@@ -661,5 +684,5 @@ async def process_voice(request: Request): # Removed background_tasks as server 
 
 # This block is for local development, Render uses Procfile
 # if __name__ == "__main__":
-#     logger.info("Starting Professional Enterprise Neo Server...")
+#     logger.info("Starting Professional Enterprise Neo Server (Local Development Mode)...")
 #     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
