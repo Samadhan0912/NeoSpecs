@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import uvicorn
+# import pygame # REMOVED: Pygame is for local audio playback, not needed on server
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -384,7 +385,6 @@ async def _chronicler_task():
                     if await AIService.generate_voice(ai_thought, path, AppState.CURRENT_LANGUAGE_CODE):
                         AppState.PROACTIVE_AUDIO_PENDING = True
                         AppState.PROACTIVE_AUDIO_URL = f"/media/{filename}"
-                        # REMOVED SERVER-SIDE PLAYBACK: threading.Thread(target=AudioController.play, args=(path,), daemon=True).start()
                         logger.info(f"Proactive audio generated for client: {AppState.PROACTIVE_AUDIO_URL}")
                     else:
                         logger.warning("Failed to generate proactive voice, no audio URL will be available for client.")
@@ -419,7 +419,6 @@ async def startup_event():
         startup_path = os.path.join(Config.DATA_DIR, "ai_responses", "startup.mp3")
         txt = await AIService.generate_dynamic_response("System successfully booted. Introduce yourself professionally as Neo in 1 short sentence.")
         if await AIService.generate_voice(txt, startup_path, AppState.CURRENT_LANGUAGE_CODE):
-            # REMOVED SERVER-SIDE PLAYBACK: threading.Thread(target=AudioController.play, args=(startup_path,), daemon=True).start()
             logger.info(f"Startup audio generated for client: /media/{os.path.basename(startup_path)}")
         else:
             logger.warning("Failed to generate startup voice.")
@@ -485,7 +484,6 @@ async def set_mode(mode: str): # Removed background_tasks as server won't play a
     if mode not in ["professional", "wingman", "blind_assistant"]: 
         return JSONResponse({"status": "error", "message": "Invalid Mode"}, status_code=400)
     
-    # AudioController.stop() Removed server-side stop, Flutter app will handle stopping playback if needed.
     AppState.SYSTEM_MODE = mode
     
     mode_powers = {
@@ -503,7 +501,6 @@ async def set_mode(mode: str): # Removed background_tasks as server won't play a
     if await AIService.generate_voice(dynamic_msg, path, AppState.CURRENT_LANGUAGE_CODE):
         audio_url = f"/media/{os.path.basename(path)}"
         logger.info(f"Mode change audio generated for client: {audio_url}")
-        # REMOVED SERVER-SIDE PLAYBACK: background_tasks.add_task(AudioController.play, path)
     
     # Return audio_url in the response so Flutter app can play it
     return JSONResponse({"status": "success", "data": {"mode": AppState.SYSTEM_MODE, "announcement": dynamic_msg, "audio_url": audio_url}})
@@ -541,7 +538,6 @@ async def process_voice(request: Request): # Removed background_tasks as server 
         logger.info(f"🎤 Raw STT Input: {raw_query}")
         
         if any(word in raw_query.lower() for word in["stop", "quiet", "chup", "ruko"]):
-            # AudioController.stop() Removed server-side stop
             # Generate a brief stop confirmation audio, so the user knows it registered
             stop_msg = "Command registered. Halting current processes."
             if await AIService.generate_voice(stop_msg, audio_out_path, AppState.CURRENT_LANGUAGE_CODE):
@@ -682,11 +678,5 @@ async def process_voice(request: Request): # Removed background_tasks as server 
     finally:
         AppState.IS_BUSY = False
 
-if __name__ == "__main__":
-    logger.info("Starting Professional Enterprise Neo Server...")
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port)
-
-#if __name__ == "__main__":
-#     logger.info("Starting Professional Enterprise Neo Server (Local Development Mode)...")
-#     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
+# Removed the if __name__ == "__main__": block entirely.
+# Render's "Start Command" will handle running uvicorn.
