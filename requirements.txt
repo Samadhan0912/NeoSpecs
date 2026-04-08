@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+groq
+edge-tts
+chromadb
+sentence-transformers
+deepface
+pygame
+pydantic
