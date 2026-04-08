@@ -4,11 +4,7 @@ groq
 edge-tts
 chromadb
 sentence-transformers
-deepface
-pydantic 
-python-multipart 
-aiofiles 
-
-opencv-python
-tensorflow
-keras 
+pydantic
+python-multipart
+aiofiles
+opencv-python-headless
