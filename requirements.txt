@@ -1,10 +1,12 @@
-fastapi
-uvicorn[standard]
-groq
-edge-tts
-chromadb
-sentence-transformers
-pydantic
-python-multipart
+fastapi~=0.100.0
+uvicorn~=0.20.0
+groq~=1.1.0
+edge-tts~=7.2.0
+chromadb~=1.5.0
+sentence-transformers~=2.7.0
+deepface~=0.0.99
+pydantic~=2.0
+python-multipart~=0.0.0
 aiofiles
-opencv-python-headless
+opencv-python
+tf-keras # Explicitly added for compatibility with newer TensorFlow versions used by deepface
