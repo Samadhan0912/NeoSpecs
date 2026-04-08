@@ -683,5 +683,10 @@ async def process_voice(request: Request): # Removed background_tasks as server 
         AppState.IS_BUSY = False
 
 if __name__ == "__main__":
-     logger.info("Starting Professional Enterprise Neo Server (Local Development Mode)...")
-     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
+    logger.info("Starting Professional Enterprise Neo Server...")
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port)
+
+#if __name__ == "__main__":
+#     logger.info("Starting Professional Enterprise Neo Server (Local Development Mode)...")
+#     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
