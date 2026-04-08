@@ -682,7 +682,6 @@ async def process_voice(request: Request): # Removed background_tasks as server 
     finally:
         AppState.IS_BUSY = False
 
-# This block is for local development, Render uses Procfile
-# if __name__ == "__main__":
-#     logger.info("Starting Professional Enterprise Neo Server (Local Development Mode)...")
-#     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
+if __name__ == "__main__":
+     logger.info("Starting Professional Enterprise Neo Server (Local Development Mode)...")
+     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, workers=1)
