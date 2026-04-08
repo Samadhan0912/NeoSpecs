@@ -6,5 +6,4 @@ edge-tts
 chromadb
 sentence-transformers
 deepface
-pygame
 pydantic
