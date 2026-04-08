@@ -5,16 +5,10 @@ edge-tts
 chromadb
 sentence-transformers
 deepface
-pydantic # FastAPI uses Pydantic for request/response models implicitly
-python-multipart # Required for file uploads in FastAPI
-aiofiles # For async file operations (safe_write_audio)
-# deepface dependencies, ensure these are compatible with Render's environment
-# deepface might install these automatically, but listing explicitly can help.
+pydantic 
+python-multipart 
+aiofiles 
+
 opencv-python
-tensorflow==2.16.1 # Specify a stable version, check DeepFace compatibility
-keras==3.3.3 # Specify a stable version, check DeepFace compatibility
-# Other dependencies deepface might pull:
-# matplotlib
-# pandas
-# tqdm
-# image
+tensorflow
+keras 
