@@ -1,15 +1,20 @@
-fastapi~=0.100.0        # Allow compatible minor versions of FastAPI
-uvicorn~=0.20.0         # Allow compatible minor versions of Uvicorn
-groq~=1.1.0             # Allow compatible minor versions of Groq client
-edge-tts~=7.2.0         # Allow compatible minor versions of Edge TTS
-chromadb~=1.5.0         # Allow compatible minor versions of ChromaDB
-sentence-transformers~=2.7.0 # Allow compatible minor versions of Sentence Transformers
-deepface~=0.0.99        # Let DeepFace manage its own TensorFlow/Keras versions
-pydantic~=2.0           # Allow compatible minor versions of Pydantic (FastAPI dependency)
-python-multipart~=0.0.0 # Allow compatible minor versions (for file uploads)
-aiofiles~=23.0.0        # Allow compatible minor versions (for async file operations)
-
-# REMOVED: pygame (as discussed previously)
-# REMOVED: opencv-python (DeepFace usually installs it)
-# REMOVED: tensorflow==2.16.1 (Let DeepFace decide)
-# REMOVED: keras==3.3.3 (Let DeepFace decide)
+fastapi
+uvicorn
+groq
+edge-tts
+chromadb
+sentence-transformers
+deepface
+pydantic # FastAPI uses Pydantic for request/response models implicitly
+python-multipart # Required for file uploads in FastAPI
+aiofiles # For async file operations (safe_write_audio)
+# deepface dependencies, ensure these are compatible with Render's environment
+# deepface might install these automatically, but listing explicitly can help.
+opencv-python
+tensorflow==2.16.1 # Specify a stable version, check DeepFace compatibility
+keras==3.3.3 # Specify a stable version, check DeepFace compatibility
+# Other dependencies deepface might pull:
+# matplotlib
+# pandas
+# tqdm
+# image
